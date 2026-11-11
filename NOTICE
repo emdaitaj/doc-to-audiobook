@@ -1,0 +1,44 @@
+doc-to-audiobook
+Copyright (C) 2026 emdaitaj — https://github.com/emdaitaj/doc-to-audiobook
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License version 3 (see LICENSE),
+with the following additional terms added under section 7 of that licence.
+
+ADDITIONAL TERMS (AGPL-3.0, section 7)
+--------------------------------------
+
+1. Attribution (section 7(b)).
+   Every copy, fork, modified version, or service built on this program must
+   keep a visible attribution to the original author, including a link to:
+
+       https://github.com/emdaitaj
+
+   The attribution must appear:
+     a) in the README or main documentation of any distributed copy or
+        derived work, and
+     b) in any program or web service that uses this work and shows the user a
+        user interface (an "About" page, footer, help text or startup banner
+        is enough),
+   in a form such as:
+
+       Based on doc-to-audiobook by emdaitaj — https://github.com/emdaitaj
+
+2. Marking modified versions (section 7(c)).
+   A modified version must be marked as modified, and must not be presented
+   as the original.
+
+3. Publishing modifications.
+   This restates what AGPL-3.0 already requires. If you distribute a modified
+   version, or let users interact with one over a network (a website, an API,
+   a bot), you must make the complete corresponding source code of your
+   modified version available to those users under these same terms.
+
+THIRD-PARTY COMPONENTS
+----------------------
+
+These terms cover only the code in this repository. The tools and models it
+downloads or calls have their own licences, including Kokoro-82M
+(Apache-2.0), OmniVoice (code Apache-2.0, model weights CC-BY-NC-4.0, which
+means no commercial use), PaddleOCR (Apache-2.0), Tesseract (Apache-2.0),
+PyMuPDF (AGPL-3.0) and FFmpeg (LGPL/GPL).

@@ -1,0 +1,24 @@
+# Allow-list: this folder is also a working directory full of books, scans and
+# audio that must never be committed. Only the files below are tracked.
+*
+!*/
+
+!/.gitignore
+!/.gitattributes
+!/LICENSE
+!/NOTICE
+!/README.md
+!/pdf_to_audiobook.py
+!/install.py
+!/install.ps1
+!/install.cmd
+!/install.sh
+!/audiobook.cmd
+!/audiobook.sh
+!/tools/
+!/tools/book_deskew_split.py
+
+# never, even inside allowed folders
+envs/
+tessdata_best/
+__pycache__/

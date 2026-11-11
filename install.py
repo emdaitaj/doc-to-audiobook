@@ -146,6 +146,18 @@ COMPONENTS = {
         smoke=("import torchaudio, soundfile, imageio_ffmpeg\n"
                "from omnivoice import OmniVoice, OmniVoiceGenerationConfig, VoiceClonePrompt\n"
                + TORCH_CHECK),
+        # Extras that make the output better but are not needed to run. Each
+        # is installed only from wheels, checked, and removed again if the
+        # check fails, so it can never break a working env.
+        optional=[(
+            "WeTextProcessing",
+            "spoken numbers in Chinese (num2words covers ~50 other languages)",
+            "from omnivoice.utils.text import normalize_text as n\n"
+            "out = n('Chapter 12, 1987.', 'en')\n"
+            "assert '12' not in out and '1987' not in out, out\n"
+            "print(out)",
+            "only Chinese numbers are affected; every other language uses num2words",
+        )],
     ),
     "paddle": dict(
         about="PaddleOCR 2.x on CPU: OCR for scanned PDFs",
@@ -389,6 +401,37 @@ def build_env(uv, name, comp, py, build, args):
     return env_dir
 
 
+def add_optional(uv, name, comp, env_dir, report):
+    """Install a component's optional extras where binary wheels exist."""
+    py = venv_python(env_dir)
+    for pkg, what, check, fallback in comp.get("optional", []):
+        extra = report[name].setdefault("optional", {})
+        if run([py, "-c", check], capture=True, check=False).returncode == 0:
+            say(f"  + {pkg}: already there ({what})")
+            extra[pkg] = "ok"
+            continue
+        cmd = [uv, "pip", "install", "--python", py, pkg]
+        for dep in NO_BUILD:
+            cmd += ["--only-binary", dep]
+        r = run(cmd, capture=True, check=False)
+        if r.returncode != 0:
+            why = ("no ready-made build for this platform"
+                   if re.search(r"no (?:usable )?wheels|unsatisfiable", r.stderr or "", re.I)
+                   else last_error_line(r.stderr))
+            say(f"  - {pkg}: skipped, {why}; {fallback}")
+            extra[pkg] = "unavailable"
+            continue
+        c = run([py, "-c", check], capture=True, check=False)
+        if c.returncode == 0:
+            say(f"  + {pkg}: installed ({what})")
+            extra[pkg] = "ok"
+        else:
+            run([uv, "pip", "uninstall", "--python", py, pkg], capture=True, check=False)
+            say(f"  - {pkg}: installed but its check failed ({last_error_line(c.stderr)}); "
+                f"removed again; {fallback}")
+            extra[pkg] = "failed"
+
+
 def install_component(uv, name, builds, args, report):
     comp = COMPONENTS[name]
     head(f"{name}: {comp['about']}")
@@ -398,6 +441,8 @@ def install_component(uv, name, builds, args, report):
         if ok:
             say(f"  already installed and working ({info}) - use --recreate to rebuild")
             report[name] = {"status": "ok", "info": info, "kept": True}
+            if not args.dry_run:
+                add_optional(uv, name, comp, env_dir, report)
             return True
         say(f"  existing env is broken ({info}); rebuilding")
 
@@ -426,6 +471,7 @@ def install_component(uv, name, builds, args, report):
             say(f"  [works] {info}")
             report[name] = {"status": "ok", "python": py, "info": info,
                             "torch": str(build) if build else None}
+            add_optional(uv, name, comp, env_dir, report)
             return True
         say(f"  check failed on Python {py}: {info}; trying the next option")
     if not tried:
@@ -578,6 +624,11 @@ def main():
             ok, info = smoke(os.path.join(ENVS, name), COMPONENTS[name])
             failures += not ok
             say(f"  {name:10s} {'OK  ' if ok else 'FAIL'} {info}")
+            for pkg, what, check, fallback in COMPONENTS[name].get("optional", []) if ok else []:
+                py = venv_python(os.path.join(ENVS, name))
+                has = run([py, "-c", check], capture=True, check=False).returncode == 0
+                say(f"  {'':10s} {'+' if has else '-'} {pkg}: "
+                    + (what if has else f"not installed; {fallback}"))
         tess = find_tesseract()
         say(f"  {'tesseract':10s} {'OK  ' if tess else 'none'} {tess or ''}")
         sys.exit(1 if failures else 0)

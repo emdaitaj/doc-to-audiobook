@@ -191,7 +191,7 @@ constant bitrate, so it can be played and seeked while it grows.
 | format | how it is read |
 | --- | --- |
 | **PDF, text** | text layer, with hyphenation joined, page numbers removed, abbreviations expanded (`pp.` → "pages", `vs.` → "versus") |
-| **PDF, scanned** | rendered at high DPI, two-page spreads split at the gutter, each page deskewed, OCR'd with PaddleOCR (Tesseract as fallback), headers, page numbers and watermarks dropped, footnotes moved to the end |
+| **PDF, scanned** | rendered at high DPI, two-page spreads split at the gutter, each page deskewed, OCR'd with PaddleOCR (Tesseract as fallback), page numbers and watermarks dropped, footnotes moved to the end. Running headers are recognised by repeating across pages (allowing for OCR typos), so a page's real first line and chapter titles are kept |
 | **EPUB** | follows the spine (real reading order), skips the table of contents and `linear="no"` items such as covers |
 | **Markdown** | headings, list items and table rows become their own paragraphs, links keep their text, URLs, images and front matter are dropped, code blocks are skipped unless `--read-code` |
 | **HTML** | `script`, `style` and `nav` removed, headings kept as their own paragraph |
@@ -251,8 +251,27 @@ narrator for another book. With `--ref-audio` your own clip is cloned instead.
   batch 4 measured 4% slower for 40% more VRAM.
 - `--wpm 165` slows the model down from its natural ~225 wpm, which is podcast
   pace. Below ~170 it stops following the request, so treat it as a nudge.
-- Numbers are spelled out with `num2words`. Full text normalisation
-  (`omnivoice[tn]`) needs `pynini`, which does not build on Windows.
+
+**Numbers and dates.** Kokoro reads numbers itself. For OmniVoice they are
+spelled out before narration, so "In 1987, 3.5% of 1,200 people paid $12.50 on
+the 2nd at 10:30" is read as "In nineteen eighty-seven, three point five percent
+of one thousand, two hundred people paid twelve dollars, fifty cents on the
+second at ten thirty":
+
+- The converter uses **num2words**, in about 50 languages including English,
+  German, French, Spanish, Russian, Arabic and Persian. Thousands separators and
+  decimal commas follow the language (`1.200,5` in German, `3 000` in French).
+  English also gets years, ordinals, money, clock times and ranges
+  (`1990-1995` → "nineteen ninety to nineteen ninety-five").
+- For languages num2words doesn't know, in practice Chinese, OmniVoice's own
+  normaliser **WeTextProcessing** is used if it is installed. The installer adds
+  it wherever it has binary wheels, which today means Linux; it needs `pynini`,
+  which has no Windows build. num2words is preferred even where both work: on
+  English it reads "$12.50" as "twelve dollars, fifty cents", where
+  WeTextProcessing says "twelve point five dollars".
+- In any other language, numbers are left as written.
+
+The first line of the narration log says which one is in use.
 
 ---
 

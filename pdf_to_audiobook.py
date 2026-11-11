@@ -616,13 +616,65 @@ def render_or_split(pdf, pages, layout, split_dir):
     return sorted(f for f in os.listdir(split_dir) if f.endswith(".png"))
 
 
-def clean_scanned_page(pg):
+def visible_lines(pg):
+    """A page's OCR lines top to bottom, minus scanner-app watermarks."""
+    ls = sorted(pg["lines"], key=lambda l: l["top"])
+    return [l for l in ls if "camscanner" not in l["text"].lower().replace(" ", "")
+            and l["text"].strip().upper() != "CS"]
+
+
+HEADER_ZONE = 0.12        # a running header is the first line, in the top 12% of the page
+HEADER_REPEATS = 3        # ... and its text tops at least this many pages
+
+
+def _header_key(text):
+    return re.sub(r"[^a-z]", "", text.lower())
+
+
+def _looks_like_folio(text):
+    """'124', 'xii', '124  The Fall of the House' or 'Chapter Two   37'."""
+    t = text.strip()
+    if re.fullmatch(r"[0-9]{1,4}|[ivxlcIVXLC]{1,6}", t):
+        return True
+    return len(t) <= 70 and bool(re.fullmatch(r"\d{1,4}\s+\D.*|.*\D\s+\d{1,4}", t))
+
+
+def find_running_headers(pgs):
+    """For each page, whether its first line is a running header.
+
+    A position-only rule ("anything in the top 5% is a header") also throws
+    away the first real line of a cropped page and every chapter title near
+    the top. Running headers give themselves away by repeating: the book or
+    chapter title at the top of page after page (OCR garbles them a little
+    differently each time, so the match is fuzzy). A first line that looks
+    like a page number plus a short title is a header even if it is unique.
+    """
+    firsts = []
+    for pg in pgs:
+        ls = visible_lines(pg)
+        top = ls[0] if ls and ls[0]["top"] < HEADER_ZONE * pg["H"] and len(ls) > 1 else None
+        firsts.append(top)
+    keys = [_header_key(l["text"]) if l else "" for l in firsts]
+    out = []
+    for i, line in enumerate(firsts):
+        if line is None or not keys[i]:
+            out.append(False)
+            continue
+        if _looks_like_folio(line["text"]):
+            out.append(True)
+            continue
+        same = sum(1 for j, k in enumerate(keys) if k and (
+            k == keys[i] or difflib.SequenceMatcher(None, k, keys[i]).ratio() >= 0.72))
+        out.append(same >= HEADER_REPEATS)
+    return out
+
+
+def clean_scanned_page(pg, has_header=False):
     """PaddleOCR line boxes for one page -> (body_text, footnote_text)."""
     W, H = pg["W"], pg["H"]
-    ls = sorted(pg["lines"], key=lambda l: l["top"])
-    ls = [l for l in ls if "camscanner" not in l["text"].lower().replace(" ", "")
-          and l["text"].strip().upper() != "CS"]
-    ls = [l for l in ls if l["top"] > 0.055 * H]                       # drop running header
+    ls = visible_lines(pg)
+    if has_header:                                                     # drop running header
+        ls = ls[1:]
     def pageno(t):
         s = t.strip(); return s and len(s) <= 4 and re.fullmatch(r"[0-9ivxlcIVXLC]+", s)
     while ls and ls[-1]["top"] > 0.84 * H and pageno(ls[-1]["text"]):  # drop page number
@@ -722,7 +774,9 @@ def run_scanned(pdf, pages, layout, workdir, ocr_engine):
             sh([PVENV, "-", split_dir, out_json], input=PADDLE_WORKER,
                text=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
             pgs = json.load(open(out_json, encoding="utf-8"))
-            bodies, foots = zip(*(clean_scanned_page(p) for p in pgs))
+            headers = find_running_headers(pgs)
+            print(f"[ocr] running headers found on {sum(headers)} of {len(pgs)} page(s)")
+            bodies, foots = zip(*(clean_scanned_page(p, h) for p, h in zip(pgs, headers)))
             return assemble(list(bodies), list(foots))
         except Exception as e:
             print(f"[ocr] PaddleOCR failed ({e}); falling back to Tesseract")
@@ -902,12 +956,142 @@ else:
 # Windows wheel.  Ask once rather than crashing on the first paragraph.
 from omnivoice.utils.text import normalize_text as _norm
 try:
-    _norm("Chapter 12, 1987.", lang)
-    NORMALIZE = True
+    # without WeTextProcessing some languages come back unchanged instead of
+    # raising, so "works" means the digits really turned into words
+    NORMALIZE = not re.search(r"\d", _norm("12 1987", lang))
 except Exception:
     NORMALIZE = False
-    print("[tts] no WeTextProcessing: numbers and dates are passed through as "
-          "written (pip install WeTextProcessing to fix)", flush=True)
+
+# ---- numbers -> words without WeTextProcessing ------------------------------
+# num2words is pure Python and installs everywhere, and covers ~50 languages
+# (WeTextProcessing only does English and Chinese). Applied before want(), so
+# the duration asked for matches the words that will actually be spoken.
+try:
+    import num2words as _n2w
+except ImportError:
+    _n2w = None
+
+N2W_NAMES = {
+    "english": "en", "german": "de", "french": "fr", "spanish": "es",
+    "italian": "it", "portuguese": "pt", "dutch": "nl", "russian": "ru",
+    "polish": "pl", "ukrainian": "uk", "turkish": "tr", "arabic": "ar",
+    "persian": "fa", "farsi": "fa", "hebrew": "he", "japanese": "ja",
+    "korean": "ko", "vietnamese": "vi", "thai": "th", "indonesian": "id",
+    "czech": "cs", "slovak": "sk", "slovenian": "sl", "serbian": "sr",
+    "swedish": "sv", "norwegian": "no", "danish": "da", "finnish": "fi",
+    "hungarian": "hu", "romanian": "ro", "lithuanian": "lt", "latvian": "lv",
+    "catalan": "ca", "welsh": "cy", "icelandic": "is", "bengali": "bn",
+    "telugu": "te", "kannada": "kn", "amharic": "am", "azerbaijani": "az",
+    "belarusian": "be", "esperanto": "eo", "tajik": "tg",
+}
+N2W_ALIASES = {"arb": "ar", "pes": "fa", "fas": "fa", "prs": "fa", "heb": "he",
+               "nob": "no", "nb": "no", "nn": "no", "zsm": "id", "ind": "id"}
+PERCENT = {"en": "percent", "de": "Prozent", "fr": "pour cent", "es": "por ciento",
+           "it": "per cento", "pt": "por cento", "nl": "procent", "sv": "procent",
+           "da": "procent", "no": "prosent", "pl": "procent", "cs": "procent"}
+
+
+def n2w_lang(lang):
+    if _n2w is None:
+        return None
+    key = str(lang or "en").strip()
+    low = key.lower()
+    code = N2W_NAMES.get(low) or N2W_ALIASES.get(low) or key.replace("-", "_")
+    for cand in (code, code.split("_")[0].lower()):
+        if cand in _n2w.CONVERTER_CLASSES:
+            return cand
+    return None
+
+
+def spell_numbers(text, lang):
+    # 'In 1987, 3.5% of 1,200 people paid $12.50 on the 2nd' -> words
+    nl = n2w_lang(lang)
+    if not nl or not re.search(r"\d", text):
+        return text
+
+    def words(value, **kw):
+        try:
+            return _n2w.num2words(value, lang=nl, **kw)
+        except Exception:
+            try:
+                return _n2w.num2words(value, lang=nl)
+            except Exception:
+                return None
+
+    en = nl.startswith("en")
+    # thousands separators / decimal mark: 1,200.5 in English, 1.200,5 or
+    # 1 200,5 (space, no-break space, narrow no-break space) elsewhere
+    thou, dec = (",", r"\.") if en or nl in ("ja", "ko", "th", "he") else ("[. " + chr(0xA0) + chr(0x202F) + "]", ",")
+    num = (r"(?<![\w.,])(\d{1,3}(?:" + thou + r"\d{3})+|\d+)"
+           r"(?:" + dec + r"(\d+))?(?![\w])")
+
+    def to_value(whole, frac):
+        whole = re.sub(r"\D", "", whole)
+        if len(whole) > 15:
+            return None
+        return float(f"{whole}.{frac}") if frac else int(whole)
+
+    if en:
+        # money: $12.50, £3, €1,200
+        cur = {"$": "USD", "£": "GBP", "€": "EUR"}
+        def money(m):
+            v = to_value(m.group(2), m.group(3))
+            # a float, because num2words reads a whole number as cents
+            w = None if v is None else words(float(v), to="currency", currency=cur[m.group(1)])
+            if w:
+                w = re.sub(r",? (?:and )?zero (?:cents?|pence|penny)\b", "", w)
+            return w or m.group(0)
+        text = re.sub(r"([$£€])\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{2}))?(?!\d)", money, text)
+        # ordinals: 1st, 22nd, 103rd, 4th
+        text = re.sub(r"(?<![\w])(\d+)(st|nd|rd|th)\b",
+                      lambda m: words(int(m.group(1)), to="ordinal") or m.group(0), text)
+        # clock times: 10:30, 7:05
+        def clock(m):
+            h, mi = int(m.group(1)), int(m.group(2))
+            if h > 24 or mi > 59:
+                return m.group(0)
+            hw = words(h)
+            if mi == 0:
+                return f"{hw} o'clock"
+            return f"{hw} oh {words(mi)}" if mi < 10 else f"{hw} {words(mi)}"
+        text = re.sub(r"(?<![\w:])(\d{1,2}):(\d{2})(?![\w:])", clock, text)
+        # ranges: 1990-1995, pages 10-12
+        text = re.sub(r"(?<=\d)\s?[-–]\s?(?=\d)", " to ", text)
+
+    # percentages
+    pct = PERCENT.get(nl.split("_")[0])
+    def percent(m):
+        v = to_value(m.group(1), m.group(2))
+        w = None if v is None else words(v)
+        return f"{w} {pct}" if w and pct else (f"{w}%" if w else m.group(0))
+    text = re.sub(num + r"\s?%", percent, text)
+
+    # everything else; four-digit years read as years in English
+    def plain(m):
+        v = to_value(m.group(1), m.group(2))
+        if v is None:
+            return m.group(0)
+        if en and isinstance(v, int) and 1000 <= v <= 2099 and len(m.group(1)) == 4:
+            w = words(v, to="year")
+        else:
+            w = words(v)
+        return w or m.group(0)
+    return re.sub(num, plain, text)
+
+
+# num2words first: measured on the same sentence it reads English better than
+# WeTextProcessing ("one thousand, two hundred", "twelve dollars, fifty cents"
+# against "thousand two hundred", "twelve point five dollars"). WeTextProcessing
+# is kept for what num2words cannot do, which in practice is Chinese.
+SPELL = bool(n2w_lang(lang))
+NORMALIZE = NORMALIZE and not SPELL
+if SPELL:
+    print(f"[tts] numbers and dates: num2words ({n2w_lang(lang)})", flush=True)
+elif NORMALIZE:
+    print("[tts] numbers and dates: WeTextProcessing", flush=True)
+else:
+    print(f"[tts] numbers are passed through as written: no WeTextProcessing, and "
+          f"num2words has no {lang!r}", flush=True)
 
 ff = imageio_ffmpeg.get_ffmpeg_exe()
 sil = lambda s: np.zeros(int(SR * s), dtype=np.float32)
@@ -917,6 +1101,8 @@ def say(texts):
     # one batched call, falling back to one-at-a-time if the GPU says no.
     # A batch takes one duration per item and has no way to say "you decide"
     # for just one of them, so a batch holding a heading goes item by item.
+    if SPELL:
+        texts = [spell_numbers(t, lang) for t in texts]
     kw = dict(voice_clone_prompt=prompt, language=lang, speed=speed,
               normalize_text=NORMALIZE, generation_config=gcfg)
     d = want(texts)

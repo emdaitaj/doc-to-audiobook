@@ -346,14 +346,28 @@ def plan_component(uv, name, comp, builds, args, skip_builds=()):
 # ---------------------------------------------------------------------------
 #  build + verify
 # ---------------------------------------------------------------------------
-def smoke(env_dir, comp):
+# A check that failed because a model download broke off, not because the env
+# is wrong. Retried in place instead of rebuilding with another Python.
+FLAKY_DOWNLOAD = re.compile(r"ChunkedEncodingError|IncompleteRead|ConnectionError|"
+                            r"ConnectTimeout|ReadTimeout|Connection (?:broken|reset|aborted)|"
+                            r"timed out|Temporary failure in name resolution", re.I)
+
+
+def smoke(env_dir, comp, attempts=3):
     py = venv_python(env_dir)
     if not os.path.exists(py):
         return False, "no interpreter"
-    r = run([py, "-c", comp["smoke"]], capture=True, check=False)
-    if r.returncode == 0:
-        return True, (r.stdout or "").strip().splitlines()[-1] if r.stdout.strip() else "ok"
-    return False, last_error_line(r.stderr)
+    for attempt in range(1, attempts + 1):
+        r = run([py, "-c", comp["smoke"]], capture=True, check=False)
+        if r.returncode == 0:
+            lines = (r.stdout or "").strip().splitlines()
+            return True, lines[-1] if lines else "ok"
+        why = last_error_line(r.stderr)
+        if attempt < attempts and FLAKY_DOWNLOAD.search(r.stderr or ""):
+            say(f"  download interrupted ({why[:80]}); retrying the check ({attempt}/{attempts - 1})")
+            continue
+        return False, why
+    return False, why
 
 
 def build_env(uv, name, comp, py, build, args):
